@@ -1,12 +1,9 @@
 use std::cell::Cell;
 
 use objc2::rc::Retained;
-use objc2::runtime::{NSObjectProtocol, ProtocolObject};
-use objc2::{declare_class, mutability, ClassType, DeclaredClass};
-use objc2_foundation::{
-    CGPoint, CGRect, CGSize, MainThreadMarker, NSNumber, NSObject, NSObjectNSKeyValueCoding,
-    NSRange, NSString,
-};
+use objc2::runtime::{NSObjectProtocol, ProtocolObject, Sel};
+use objc2::{declare_class, mutability, sel, ClassType, DeclaredClass};
+use objc2_foundation::{CGPoint, CGRect, CGSize, MainThreadMarker, NSObject, NSRange, NSString};
 use objc2_ui_kit::{
     UIReturnKeyType, UIScrollViewDelegate, UITextAutocapitalizationType, UITextAutocorrectionType,
     UITextInput, UITextInputTraits, UITextView, UITextViewDelegate, UIView,
@@ -234,20 +231,22 @@ impl Ime {
         self.delegate.ivars().action.set(options.action);
         unsafe {
             self.view.setSecureTextEntry(options.purpose == ImePurpose::Password);
-            // UIKit forwards these trait accessors instead of exposing concrete methods.
-            let set_trait = |key, value| {
-                self.view
-                    .setValue_forKey(Some(&NSNumber::new_isize(value)), &NSString::from_str(key));
+            // These void(NSInteger) setters use forwarding, which objc2's method-table check cannot
+            // follow.
+            let set_trait = |selector, value| {
+                let send: unsafe extern "C-unwind" fn(&UITextView, Sel, isize) =
+                    std::mem::transmute(objc2::ffi::objc_msgSend as *const ());
+                send(&self.view, selector, value);
             };
             let (correction, capitalization) = if options.purpose == ImePurpose::Normal {
                 (UITextAutocorrectionType::Default, UITextAutocapitalizationType::Sentences)
             } else {
                 (UITextAutocorrectionType::No, UITextAutocapitalizationType::None)
             };
-            set_trait("autocorrectionType", correction.0);
-            set_trait("autocapitalizationType", capitalization.0);
+            set_trait(sel!(setAutocorrectionType:), correction.0);
+            set_trait(sel!(setAutocapitalizationType:), capitalization.0);
             set_trait(
-                "returnKeyType",
+                sel!(setReturnKeyType:),
                 match options.action {
                     ImeAction::Newline | ImeAction::Previous => UIReturnKeyType::UIReturnKeyDefault,
                     ImeAction::Submit => UIReturnKeyType::UIReturnKeyDone,
