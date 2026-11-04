@@ -1567,7 +1567,13 @@ impl WindowDelegate {
     }
 
     #[inline]
-    pub fn set_ime_purpose(&self, _purpose: ImePurpose) {}
+    pub fn set_ime_purpose(&self, purpose: ImePurpose) {
+        self.view().set_ime_purpose(purpose);
+    }
+
+    pub fn set_ime_text_state(&self, state: crate::event::ImeTextState) {
+        self.view().set_ime_text_state(state);
+    }
 
     #[inline]
     pub fn focus_window(&self) {

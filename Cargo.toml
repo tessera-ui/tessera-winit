@@ -1,5 +1,5 @@
 [package]
-name = "winit"
+name = "tessera-winit"
 version = "0.30.13"
 authors = [
     "The winit contributors",
@@ -8,7 +8,7 @@ authors = [
 description = "Cross-platform window creation library."
 keywords = ["windowing"]
 readme = "README.md"
-documentation = "https://docs.rs/winit"
+documentation = "https://docs.rs/tessera-winit"
 categories = ["gui"]
 rust-version.workspace = true
 repository.workspace = true
@@ -55,6 +55,9 @@ targets = [
 ]
 rustdoc-args = ["--cfg", "docsrs"]
 
+[lib]
+name = "winit"
+
 # Features are documented in either `lib.rs` or under `winit::platform`.
 [features]
 default = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
@@ -86,7 +89,7 @@ cfg_aliases = "0.2.1"
 [dependencies]
 bitflags = "2"
 cursor-icon = "1.1.0"
-dpi = { version = "0.1.1", path = "dpi" }
+dpi = "0.1.2"
 rwh_04 = { package = "raw-window-handle", version = "0.4", optional = true }
 rwh_05 = { package = "raw-window-handle", version = "0.5.2", features = [
     "std",
@@ -102,7 +105,7 @@ tracing = { version = "0.1.40", default-features = false }
 image = { version = "0.25.0", default-features = false, features = ["png"] }
 tracing = { version = "0.1.40", default-features = false, features = ["log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-winit = { path = ".", features = ["rwh_05"] }
+winit = { package = "tessera-winit", version = "0.30.13", path = ".", features = ["rwh_05"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
 softbuffer = { version = "0.4.0", default-features = false, features = [
@@ -113,7 +116,7 @@ softbuffer = { version = "0.4.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-android-activity = "0.6.0"
+android-activity = { package = "tessera-android-activity", version = "0.6.1", path = "../tessera-android-activity/android-activity" }
 ndk = { version = "0.9.0", default-features = false }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
@@ -202,6 +205,8 @@ features = [
     "UIGeometry",
     "UIGestureRecognizer",
     "UITextInput",
+    "UITextView",
+    "UIScrollView",
     "UITextInputTraits",
     "UIOrientation",
     "UIPanGestureRecognizer",
@@ -314,7 +319,12 @@ web_sys = { package = "web-sys", version = "0.3.70", features = [
     "Event",
     "EventTarget",
     "FocusEvent",
+    "FocusOptions",
     "HtmlCanvasElement",
+    "HtmlTextAreaElement",
+    "HtmlInputElement",
+    "InputEvent",
+    "CompositionEvent",
     "HtmlElement",
     "HtmlImageElement",
     "ImageBitmap",
@@ -368,8 +378,8 @@ resolver = "2"
 members = ["dpi"]
 
 [workspace.package]
-rust-version = "1.70.0"
-repository = "https://github.com/rust-windowing/winit"
+rust-version = "1.85.0"
+repository = "https://github.com/tessera-ui/tessera-winit"
 license = "Apache-2.0"
 edition = "2021"
 

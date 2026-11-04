@@ -772,6 +772,15 @@ impl From<ModifiersState> for Modifiers {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Ime {
+    /// Replaces the editor's text, directional selection, and composing region.
+    TextState(ImeTextState),
+
+    /// Requests an editor action after all preceding text updates.
+    Action(ImeAction),
+
+    /// Deletes UTF-8 bytes before and after the current selection, preserving selected text.
+    DeleteSurroundingText { before: usize, after: usize },
+
     /// Notifies when the IME was enabled.
     ///
     /// After getting this event you could receive [`Preedit`][Self::Preedit] and
@@ -800,6 +809,143 @@ pub enum Ime {
     /// also stop issuing IME related requests like [`Window::set_ime_cursor_area`] and clear
     /// pending preedit text.
     Disabled,
+}
+
+/// The source of a published editor update.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum ImeChangeCause {
+    /// The editor is responding to an input-method edit.
+    InputMethod,
+    /// Keyboard input, pointer selection, or an application update.
+    #[default]
+    Other,
+}
+
+/// A complete editable text snapshot. All offsets are UTF-8 byte offsets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImeTextState {
+    /// The complete text, including any composing region.
+    pub text: String,
+    /// The selection anchor followed by the active caret.
+    pub selection: std::ops::Range<usize>,
+    /// The composing region, or `None` when composition has ended.
+    pub composition: Option<std::ops::Range<usize>>,
+}
+
+/// The action requested by a virtual keyboard.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum ImeAction {
+    /// Insert a newline.
+    Newline,
+    /// Submit the current editor.
+    #[default]
+    Submit,
+    /// Move to the next editor.
+    Next,
+    /// Move to the previous editor.
+    Previous,
+}
+
+#[cfg(any(android_platform, web_platform, ios_platform, macos_platform, windows_platform, test))]
+pub(crate) fn ime_byte_offset(text: &str, utf16_offset: usize) -> usize {
+    let mut units = 0;
+    for (offset, character) in text.char_indices() {
+        units += character.len_utf16();
+        if units > utf16_offset {
+            return offset;
+        }
+    }
+    text.len()
+}
+
+#[cfg(any(
+    all(android_platform, feature = "android-game-activity"),
+    web_platform,
+    ios_platform,
+    macos_platform,
+    test
+))]
+pub(crate) fn ime_utf16_offset(text: &str, byte_offset: usize) -> usize {
+    text.char_indices()
+        .take_while(|(offset, _)| *offset < byte_offset)
+        .map(|(_, character)| character.len_utf16())
+        .sum()
+}
+
+#[cfg(any(wayland_platform, test))]
+pub(crate) fn ime_surrounding_text(mut state: ImeTextState) -> Option<(String, i32, i32)> {
+    if let Some(range) = state.composition {
+        state.selection = range.start..range.start;
+        state.text.get(range.clone())?;
+        state.text.replace_range(range, "");
+    }
+    let anchor = state.selection.start;
+    let cursor = state.selection.end;
+    let first = anchor.min(cursor);
+    let last = anchor.max(cursor);
+    let spare = 4000usize.checked_sub(last - first)?;
+    state.text.get(first..last)?;
+    let mut start = first.saturating_sub(spare / 2);
+    while !state.text.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = (start + 4000).min(state.text.len());
+    while !state.text.is_char_boundary(end) {
+        end -= 1;
+    }
+    state.text.truncate(end);
+    state.text.drain(..start);
+    if state.text.contains('\0') {
+        return None;
+    }
+    Some((state.text, (cursor - start) as i32, (anchor - start) as i32))
+}
+
+#[cfg(test)]
+mod ime_tests {
+    use super::{ime_byte_offset, ime_utf16_offset};
+
+    #[test]
+    fn surrounding_text_preserves_selection_and_omits_preedit() {
+        use super::{ime_surrounding_text, ImeTextState};
+        let (text, cursor, anchor) = ime_surrounding_text(ImeTextState {
+            text: "中".repeat(2000),
+            selection: 3006..3000,
+            composition: None,
+        })
+        .unwrap();
+        assert!(text.len() <= 4000);
+        assert_eq!(anchor - cursor, 6);
+        assert_eq!(&text[cursor as usize..anchor as usize], "中中");
+        assert_eq!(
+            ime_surrounding_text(ImeTextState {
+                text: "a😃中z".into(),
+                selection: 5..8,
+                composition: Some(1..8),
+            }),
+            Some(("az".into(), 1, 1))
+        );
+        for state in [
+            ImeTextState { text: "x".repeat(4001), selection: 0..4001, composition: None },
+            ImeTextState { text: "a\0z".into(), selection: 1..1, composition: None },
+        ] {
+            assert!(ime_surrounding_text(state).is_none());
+        }
+    }
+
+    #[test]
+    fn native_offsets_preserve_unicode_boundaries() {
+        let text = "a😃中\0z";
+        for (utf16, bytes) in [(0, 0), (1, 1), (3, 5), (4, 8), (5, 9), (6, 10)] {
+            assert_eq!(ime_byte_offset(text, utf16), bytes);
+            assert_eq!(ime_utf16_offset(text, bytes), utf16);
+        }
+        assert_eq!(ime_byte_offset(text, 2), 1);
+        assert_eq!(ime_byte_offset(text, usize::MAX), text.len());
+    }
 }
 
 /// Describes touch-screen input state.

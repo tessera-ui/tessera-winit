@@ -527,6 +527,22 @@ impl Window {
         x11_or_wayland!(match self; Window(w) => w.set_ime_allowed(allowed))
     }
 
+    pub fn set_ime_text_state(
+        &self,
+        state: crate::event::ImeTextState,
+        cause: crate::event::ImeChangeCause,
+    ) -> Result<(), NotSupportedError> {
+        match self {
+            #[cfg(wayland_platform)]
+            Self::Wayland(window) => window.set_ime_text_state(state, cause),
+            #[cfg(x11_platform)]
+            Self::X(_) => {
+                let _ = (state, cause);
+                Err(NotSupportedError::new())
+            },
+        }
+    }
+
     #[inline]
     pub fn set_ime_purpose(&self, purpose: ImePurpose) {
         x11_or_wayland!(match self; Window(w) => w.set_ime_purpose(purpose))

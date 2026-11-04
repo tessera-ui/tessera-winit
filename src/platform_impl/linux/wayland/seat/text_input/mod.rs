@@ -65,6 +65,7 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
             TextInputEvent::Enter { surface } => {
                 let window_id = wayland::make_wid(&surface);
                 text_input_data.surface = Some(surface);
+                drop(text_input_data);
 
                 let mut window = match windows.get(&window_id) {
                     Some(window) => window.lock().unwrap(),
@@ -72,9 +73,7 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
                 };
 
                 if window.ime_allowed() {
-                    text_input.enable();
-                    text_input.set_content_type_by_purpose(window.ime_purpose());
-                    text_input.commit();
+                    window.enable_text_input(text_input);
                     state.events_sink.push_window_event(WindowEvent::Ime(Ime::Enabled), window_id);
                 }
 
@@ -82,10 +81,11 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
             },
             TextInputEvent::Leave { surface } => {
                 text_input_data.surface = None;
+                drop(text_input_data);
 
                 // Always issue a disable.
-                text_input.disable();
-                text_input.commit();
+                text_input.disable_ime();
+                text_input.commit_ime();
 
                 let window_id = wayland::make_wid(&surface);
 
@@ -112,10 +112,20 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
                 text_input_data.pending_preedit = Some(Preedit { text, cursor_begin, cursor_end })
             },
             TextInputEvent::CommitString { text } => {
-                text_input_data.pending_preedit = None;
                 text_input_data.pending_commit = text;
             },
-            TextInputEvent::Done { .. } => {
+            TextInputEvent::Done { serial } => {
+                if text_input_data
+                    .enabled_since
+                    .map_or(true, |enabled| serial.wrapping_sub(enabled) >= (1 << 31))
+                {
+                    text_input_data.pending_commit = None;
+                    text_input_data.pending_preedit = None;
+                    text_input_data.pending_delete = None;
+                    return;
+                }
+                text_input_data.ready = serial == text_input_data.serial;
+                text_input_data.flush_state(text_input);
                 let window_id = match text_input_data.surface.as_ref() {
                     Some(surface) => wayland::make_wid(surface),
                     None => return,
@@ -123,10 +133,21 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
 
                 // Clear preedit, unless all we'll be doing next is sending a new preedit.
                 if text_input_data.pending_commit.is_some()
+                    || text_input_data.pending_delete.is_some()
                     || text_input_data.pending_preedit.is_none()
                 {
                     state.events_sink.push_window_event(
                         WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+                        window_id,
+                    );
+                }
+
+                if let Some((before, after)) = text_input_data.pending_delete.take() {
+                    state.events_sink.push_window_event(
+                        WindowEvent::Ime(Ime::DeleteSurroundingText {
+                            before: before as usize,
+                            after: after as usize,
+                        }),
                         window_id,
                     );
                 }
@@ -149,8 +170,8 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
                     );
                 }
             },
-            TextInputEvent::DeleteSurroundingText { .. } => {
-                // Not handled.
+            TextInputEvent::DeleteSurroundingText { before_length, after_length } => {
+                text_input_data.pending_delete = Some((before_length, after_length));
             },
             _ => {},
         }
@@ -158,10 +179,36 @@ impl Dispatch<ZwpTextInputV3, TextInputData, WinitState> for TextInputState {
 }
 
 pub trait ZwpTextInputV3Ext {
+    fn enable_ime(&self);
+    fn disable_ime(&self);
+    fn commit_ime(&self);
     fn set_content_type_by_purpose(&self, purpose: ImePurpose);
 }
 
 impl ZwpTextInputV3Ext for ZwpTextInputV3 {
+    fn enable_ime(&self) {
+        let mut data = self.data::<TextInputData>().unwrap().inner.lock().unwrap();
+        data.ready = true;
+        data.enabled_since = Some(data.serial.wrapping_add(1));
+        data.pending_commit = None;
+        data.pending_preedit = None;
+        data.pending_delete = None;
+        self.enable();
+    }
+
+    fn disable_ime(&self) {
+        let mut data = self.data::<TextInputData>().unwrap().inner.lock().unwrap();
+        data.enabled_since = None;
+        data.ready = true;
+        self.disable();
+    }
+
+    fn commit_ime(&self) {
+        let mut data = self.data::<TextInputData>().unwrap().inner.lock().unwrap();
+        data.state_dirty = true;
+        data.flush_state(self);
+    }
+
     fn set_content_type_by_purpose(&self, purpose: ImePurpose) {
         let (hint, purpose) = match purpose {
             ImePurpose::Normal => (ContentHint::None, ContentPurpose::Normal),
@@ -182,12 +229,27 @@ pub struct TextInputData {
 pub struct TextInputDataInner {
     /// The `WlSurface` we're performing input to.
     surface: Option<WlSurface>,
+    serial: u32,
+    enabled_since: Option<u32>,
+    ready: bool,
+    state_dirty: bool,
+    pending_delete: Option<(u32, u32)>,
 
     /// The commit to submit on `done`.
     pending_commit: Option<String>,
 
     /// The preedit to submit on `done`.
     pending_preedit: Option<Preedit>,
+}
+
+impl TextInputDataInner {
+    fn flush_state(&mut self, input: &ZwpTextInputV3) {
+        if self.ready && self.state_dirty {
+            self.serial = self.serial.wrapping_add(1);
+            self.state_dirty = false;
+            input.commit();
+        }
+    }
 }
 
 /// The state of the preedit.

@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, nightly, '1.70.0']
+        toolchain: [stable, nightly, '1.85.0']
         platform:
           # Note: Make sure that we test all the `docs.rs` targets defined in Cargo.toml!
           - { name: 'Windows 64bit MSVC', target: x86_64-pc-windows-msvc,   os: windows-latest,  }
@@ -53,7 +53,7 @@ jobs:
           - { name: 'Linux 64bit',        target: x86_64-unknown-linux-gnu, os: ubuntu-latest,   }
           - { name: 'X11',                target: x86_64-unknown-linux-gnu, os: ubuntu-latest, options: '--no-default-features --features=x11' }
           - { name: 'Wayland',            target: x86_64-unknown-linux-gnu, os: ubuntu-latest, options: '--no-default-features --features=wayland,wayland-dlopen' }
-          - { name: 'Android',            target: aarch64-linux-android,    os: ubuntu-latest, options: '--package=winit --features=android-native-activity', cmd: 'apk --' }
+          - { name: 'Android',            target: aarch64-linux-android,    os: ubuntu-latest, options: '--package=tessera-winit --features=android-native-activity', cmd: 'apk --' }
           - { name: 'Redox OS',           target: x86_64-unknown-redox,     os: ubuntu-latest,   }
           - { name: 'macOS',              target: x86_64-apple-darwin,      os: macos-latest,    }
           - { name: 'iOS x86_64',         target: x86_64-apple-ios,         os: macos-latest,    }
@@ -61,11 +61,11 @@ jobs:
           - { name: 'web',                target: wasm32-unknown-unknown,   os: ubuntu-latest,   }
         exclude:
           # Android is tested on stable-3
-          - toolchain: '1.70.0'
-            platform: { name: 'Android', target: aarch64-linux-android, os: ubuntu-latest, options: '--package=winit --features=android-native-activity', cmd: 'apk --' }
+          - toolchain: '1.85.0'
+            platform: { name: 'Android', target: aarch64-linux-android, os: ubuntu-latest, options: '--package=tessera-winit --features=android-native-activity', cmd: 'apk --' }
         include:
-          - toolchain: '1.70.0'
-            platform: { name: 'Android', target: aarch64-linux-android, os: ubuntu-latest, options: '--package=winit --features=android-native-activity', cmd: 'apk --' }
+          - toolchain: '1.85.0'
+            platform: { name: 'Android', target: aarch64-linux-android, os: ubuntu-latest, options: '--package=tessera-winit --features=android-native-activity', cmd: 'apk --' }
           - toolchain: 'nightly'
             platform: {
               name:       'web Atomic',
@@ -155,17 +155,10 @@ jobs:
     - name: Build crate
       run: cargo $CMD build $OPTIONS
 
-    # Test only on Linux x86_64, so we avoid spending unnecessary CI hours.
-    - name: Test dpi crate
-      if: >
-        contains(matrix.platform.name, 'Linux 64bit') &&
-        matrix.toolchain != '1.70.0'
-      run: cargo test -p dpi
-
     - name: Build tests
       if: >
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.85.0'
       run: cargo $CMD test --no-run $OPTIONS
 
     - name: Run tests
@@ -174,7 +167,7 @@ jobs:
         !contains(matrix.platform.target, 'ios') &&
         !contains(matrix.platform.target, 'wasm32') &&
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.85.0'
       run: cargo $CMD test $OPTIONS
 
     - name: Lint with clippy
@@ -184,7 +177,7 @@ jobs:
     - name: Build tests with serde enabled
       if: >
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.85.0'
       run: cargo $CMD test --no-run $OPTIONS --features serde
 
     - name: Run tests with serde enabled
@@ -193,7 +186,7 @@ jobs:
         !contains(matrix.platform.target, 'ios') &&
         !contains(matrix.platform.target, 'wasm32') &&
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.85.0'
       run: cargo $CMD test $OPTIONS --features serde
 
     - name: Check docs.rs documentation

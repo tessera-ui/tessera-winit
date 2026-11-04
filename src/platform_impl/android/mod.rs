@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use android_activity::input::{InputEvent, KeyAction, Keycode, MotionAction};
+#[cfg(feature = "android-game-activity")]
+use android_activity::input::{ImeOptions, InputType, TextInputState, TextSpan};
+use android_activity::input::{InputEvent, KeyAction, Keycode, MotionAction, TextInputAction};
 use android_activity::{
     AndroidApp, AndroidAppWaker, ConfigurationRef, InputStatus, MainEvent, Rect,
 };
@@ -174,6 +176,8 @@ impl<T: 'static> EventLoop<T> {
             window_target: event_loop::ActiveEventLoop {
                 p: ActiveEventLoop {
                     app: android_app.clone(),
+                    #[cfg(feature = "android-game-activity")]
+                    ime: Arc::default(),
                     control_flow: Cell::new(ControlFlow::default()),
                     exit: Cell::new(false),
                     redraw_requester: RedrawRequester::new(
@@ -373,6 +377,48 @@ impl<T: 'static> EventLoop<T> {
     {
         let mut input_status = InputStatus::Handled;
         match event {
+            InputEvent::TextEvent(state) => {
+                #[cfg(feature = "android-game-activity")]
+                if !self.window_target.p.ime.lock().unwrap().accepts(state.context_id) {
+                    return input_status;
+                }
+                let offset = |index| event::ime_byte_offset(&state.text, index);
+                let ime = event::Ime::TextState(event::ImeTextState {
+                    text: state.text.clone(),
+                    selection: offset(state.selection.start)..offset(state.selection.end),
+                    composition: state
+                        .compose_region
+                        .map(|span| offset(span.start)..offset(span.end)),
+                });
+                callback(
+                    event::Event::WindowEvent {
+                        window_id: window::WindowId(WindowId),
+                        event: event::WindowEvent::Ime(ime),
+                    },
+                    self.window_target(),
+                );
+            },
+            InputEvent::TextAction(action, context) => {
+                #[cfg(feature = "android-game-activity")]
+                if !self.window_target.p.ime.lock().unwrap().accepts(*context) {
+                    return input_status;
+                }
+                #[cfg(not(feature = "android-game-activity"))]
+                let _ = context;
+                let action = match action {
+                    TextInputAction::None => event::ImeAction::Newline,
+                    TextInputAction::Next => event::ImeAction::Next,
+                    TextInputAction::Previous => event::ImeAction::Previous,
+                    _ => event::ImeAction::Submit,
+                };
+                callback(
+                    event::Event::WindowEvent {
+                        window_id: window::WindowId(WindowId),
+                        event: event::WindowEvent::Ime(event::Ime::Action(action)),
+                    },
+                    self.window_target(),
+                );
+            },
             InputEvent::MotionEvent(motion_event) => {
                 let window_id = window::WindowId(WindowId);
                 let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
@@ -652,8 +698,31 @@ impl<T> EventLoopProxy<T> {
     }
 }
 
+#[cfg(feature = "android-game-activity")]
+struct ImeState {
+    context_id: u64,
+    options: window::ImeOptions,
+    allowed: bool,
+}
+
+#[cfg(feature = "android-game-activity")]
+impl ImeState {
+    fn accepts(&self, context: u64) -> bool {
+        self.allowed && self.context_id == context
+    }
+}
+
+#[cfg(feature = "android-game-activity")]
+impl Default for ImeState {
+    fn default() -> Self {
+        Self { context_id: 1, options: window::ImeOptions::default(), allowed: false }
+    }
+}
+
 pub struct ActiveEventLoop {
     pub(crate) app: AndroidApp,
+    #[cfg(feature = "android-game-activity")]
+    ime: Arc<Mutex<ImeState>>,
     control_flow: Cell<ControlFlow>,
     exit: Cell<bool>,
     redraw_requester: RedrawRequester,
@@ -776,6 +845,8 @@ pub struct PlatformSpecificWindowAttributes;
 
 pub(crate) struct Window {
     app: AndroidApp,
+    #[cfg(feature = "android-game-activity")]
+    ime: Arc<Mutex<ImeState>>,
     redraw_requester: RedrawRequester,
 }
 
@@ -786,7 +857,12 @@ impl Window {
     ) -> Result<Self, error::OsError> {
         // FIXME this ignores requested window attributes
 
-        Ok(Self { app: el.app.clone(), redraw_requester: el.redraw_requester.clone() })
+        Ok(Self {
+            app: el.app.clone(),
+            #[cfg(feature = "android-game-activity")]
+            ime: el.ime.clone(),
+            redraw_requester: el.redraw_requester.clone(),
+        })
     }
 
     pub(crate) fn maybe_queue_on_main(&self, f: impl FnOnce(&Self) + Send + 'static) {
@@ -915,11 +991,52 @@ impl Window {
 
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {}
 
+    #[cfg(feature = "android-game-activity")]
+    pub fn set_ime_text_state(&self, state: event::ImeTextState) {
+        let offset = |index| event::ime_utf16_offset(&state.text, index);
+        let ime = self.ime.lock().unwrap();
+        let (input_type, action, options) = ime_editor_info(ime.options);
+        self.app.set_ime_state(
+            TextInputState {
+                context_id: ime.context_id,
+                selection: TextSpan {
+                    start: offset(state.selection.start),
+                    end: offset(state.selection.end),
+                },
+                compose_region: state
+                    .composition
+                    .map(|span| TextSpan { start: offset(span.start), end: offset(span.end) }),
+                text: state.text,
+            },
+            input_type,
+            action,
+            options,
+        );
+    }
+
     pub fn set_ime_allowed(&self, allowed: bool) {
+        #[cfg(feature = "android-game-activity")]
+        {
+            let mut ime = self.ime.lock().unwrap();
+            if ime.allowed && !allowed {
+                ime.context_id = ime.context_id.checked_add(1).expect("IME context exhausted");
+            }
+            ime.allowed = allowed;
+        }
         if allowed {
             self.app.show_soft_input(true);
         } else {
-            self.app.hide_soft_input(true);
+            self.app.hide_soft_input(false);
+        }
+    }
+
+    #[cfg(feature = "android-game-activity")]
+    pub fn set_ime_options(&self, options: window::ImeOptions) {
+        let mut ime = self.ime.lock().unwrap();
+        ime.options = options;
+        if ime.allowed {
+            let (input_type, action, flags) = ime_editor_info(options);
+            self.app.set_ime_editor_info(input_type, action, flags);
         }
     }
 
@@ -1138,4 +1255,30 @@ impl VideoModeHandle {
     pub fn monitor(&self) -> MonitorHandle {
         self.monitor.clone()
     }
+}
+
+#[cfg(feature = "android-game-activity")]
+fn ime_editor_info(options: window::ImeOptions) -> (InputType, TextInputAction, ImeOptions) {
+    let mut input_type = InputType::TYPE_CLASS_TEXT;
+    match options.purpose {
+        ImePurpose::Password => input_type |= InputType::TYPE_TEXT_VARIATION_PASSWORD,
+        ImePurpose::Terminal => input_type |= InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+        ImePurpose::Normal => {},
+    }
+    let action = match options.action {
+        event::ImeAction::Newline => {
+            input_type |= InputType::TYPE_TEXT_FLAG_MULTI_LINE;
+            TextInputAction::None
+        },
+        event::ImeAction::Submit => TextInputAction::Done,
+        event::ImeAction::Next => TextInputAction::Next,
+        event::ImeAction::Previous => TextInputAction::Previous,
+    };
+    let action_code: i32 = action.into();
+    let mut flags =
+        ImeOptions::IME_FLAG_NO_FULLSCREEN | ImeOptions::from_bits_retain(action_code as u32);
+    if options.purpose == ImePurpose::Password {
+        flags |= ImeOptions::IME_FLAG_NO_PERSONALIZED_LEARNING;
+    }
+    (input_type, action, flags)
 }

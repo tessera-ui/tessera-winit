@@ -3,6 +3,7 @@ mod canvas;
 pub mod event;
 mod event_handle;
 mod fullscreen;
+mod ime;
 mod intersection_handle;
 mod media_query_handle;
 mod pointer;
@@ -14,6 +15,7 @@ use std::sync::OnceLock;
 pub use self::canvas::{Canvas, Style};
 pub use self::event::ButtonsState;
 pub use self::event_handle::EventListenerHandle;
+pub use self::ime::Ime;
 pub use self::resize_scaling::ResizeScaleHandle;
 pub use self::schedule::Schedule;
 

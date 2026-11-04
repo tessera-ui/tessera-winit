@@ -929,7 +929,12 @@ impl Window {
     }
 
     #[inline]
-    pub fn set_ime_purpose(&self, _purpose: ImePurpose) {}
+    pub fn set_ime_purpose(&self, purpose: ImePurpose) {
+        let window = self.window;
+        self.thread_executor.execute_in_thread(move || unsafe {
+            ImeContext::set_ime_purpose(window, purpose);
+        });
+    }
 
     #[inline]
     pub fn request_user_attention(&self, request_type: Option<UserAttentionType>) {

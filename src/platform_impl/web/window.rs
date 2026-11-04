@@ -25,6 +25,7 @@ pub struct Inner {
     id: WindowId,
     pub window: web_sys::Window,
     canvas: Rc<RefCell<backend::Canvas>>,
+    ime: backend::Ime,
     destroy_fn: Option<Box<dyn FnOnce()>>,
 }
 
@@ -49,9 +50,18 @@ impl Window {
         target.register(&canvas, id);
 
         let runner = target.runner.clone();
+        let ime =
+            backend::Ime::new(&document, canvas.borrow().raw(), &id.0.to_string(), move |event| {
+                runner.send_event(crate::event::Event::WindowEvent {
+                    window_id: RootWI(id),
+                    event: crate::event::WindowEvent::Ime(event),
+                });
+            });
+
+        let runner = target.runner.clone();
         let destroy_fn = Box::new(move || runner.notify_destroy_window(RootWI(id)));
 
-        let inner = Inner { id, window: window.clone(), canvas, destroy_fn: Some(destroy_fn) };
+        let inner = Inner { id, window: window.clone(), canvas, ime, destroy_fn: Some(destroy_fn) };
 
         inner.set_title(&attr.title);
         inner.set_maximized(attr.maximized);
@@ -324,18 +334,26 @@ impl Inner {
     }
 
     #[inline]
-    pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {
-        // Currently a no-op as it does not seem there is good support for this on web
+    pub fn set_ime_cursor_area(&self, position: Position, size: Size) {
+        self.ime.set_cursor_area(position, size);
     }
 
     #[inline]
-    pub fn set_ime_allowed(&self, _allowed: bool) {
-        // Currently not implemented
+    pub fn set_ime_allowed(&self, allowed: bool) {
+        self.ime.set_allowed(allowed);
+    }
+
+    pub fn set_ime_text_state(&self, state: crate::event::ImeTextState) {
+        self.ime.set_text_state(state);
     }
 
     #[inline]
-    pub fn set_ime_purpose(&self, _purpose: ImePurpose) {
-        // Currently not implemented
+    pub fn set_ime_purpose(&self, purpose: ImePurpose) {
+        self.ime.set_purpose(purpose);
+    }
+
+    pub fn set_ime_options(&self, options: crate::window::ImeOptions) {
+        self.ime.set_options(options);
     }
 
     #[inline]

@@ -4,24 +4,24 @@ use std::cell::{Cell, RefCell};
 use objc2::rc::Retained;
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
-use objc2_foundation::{CGFloat, CGPoint, CGRect, MainThreadMarker, NSObject, NSSet, NSString};
+use objc2_foundation::{CGFloat, CGPoint, CGRect, MainThreadMarker, NSObject, NSSet};
 use objc2_ui_kit::{
     UICoordinateSpace, UIEvent, UIForceTouchCapability, UIGestureRecognizer,
-    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIKeyInput, UIPanGestureRecognizer,
+    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIPanGestureRecognizer,
     UIPinchGestureRecognizer, UIResponder, UIRotationGestureRecognizer, UITapGestureRecognizer,
-    UITextInputTraits, UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
+    UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
 };
 
 use super::app_state::{self, EventWrapper};
+use super::ime::Ime;
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalPosition;
-use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
-use crate::keyboard::{Key, KeyCode, KeyLocation, NamedKey, NativeKeyCode, PhysicalKey};
+use crate::event::{Event, Force, Touch, TouchPhase, WindowEvent};
 use crate::platform_impl::platform::DEVICE_ID;
-use crate::platform_impl::KeyEventExtra;
 use crate::window::{WindowAttributes, WindowId as RootWindowId};
 
 pub struct WinitViewState {
+    ime: Ime,
     pinch_gesture_recognizer: RefCell<Option<Retained<UIPinchGestureRecognizer>>>,
     doubletap_gesture_recognizer: RefCell<Option<Retained<UITapGestureRecognizer>>>,
     rotation_gesture_recognizer: RefCell<Option<Retained<UIRotationGestureRecognizer>>>,
@@ -48,6 +48,7 @@ declare_class!(
     }
 
     unsafe impl WinitView {
+
         #[method(drawRect:)]
         fn draw_rect(&self, rect: CGRect) {
             let mtm = MainThreadMarker::new().unwrap();
@@ -332,34 +333,20 @@ declare_class!(
         }
     }
 
-    unsafe impl UITextInputTraits for WinitView {
-    }
 
-    unsafe impl UIKeyInput for WinitView {
-        #[method(hasText)]
-        fn has_text(&self) -> bool {
-            true
-        }
-
-        #[method(insertText:)]
-        fn insert_text(&self, text: &NSString) {
-            self.handle_insert_text(text)
-        }
-
-        #[method(deleteBackward)]
-        fn delete_backward(&self) {
-            self.handle_delete_backward()
-        }
-    }
 );
 
 impl WinitView {
+    pub(crate) fn ime(&self) -> &Ime {
+        &self.ivars().ime
+    }
     pub(crate) fn new(
         mtm: MainThreadMarker,
         window_attributes: &WindowAttributes,
         frame: CGRect,
     ) -> Retained<Self> {
         let this = mtm.alloc().set_ivars(WinitViewState {
+            ime: Ime::new(mtm, frame),
             pinch_gesture_recognizer: RefCell::new(None),
             doubletap_gesture_recognizer: RefCell::new(None),
             rotation_gesture_recognizer: RefCell::new(None),
@@ -371,6 +358,7 @@ impl WinitView {
         });
         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
 
+        this.ivars().ime.attach(&this);
         this.setMultipleTouchEnabled(true);
 
         if let Some(scale_factor) = window_attributes.platform_specific.scale_factor {
@@ -538,70 +526,5 @@ impl WinitView {
         }
         let mtm = MainThreadMarker::new().unwrap();
         app_state::handle_nonuser_events(mtm, touch_events);
-    }
-
-    fn handle_insert_text(&self, text: &NSString) {
-        let window = self.window().unwrap();
-        let window_id = RootWindowId(window.id());
-        let mtm = MainThreadMarker::new().unwrap();
-        // send individual events for each character
-        app_state::handle_nonuser_events(
-            mtm,
-            text.to_string().chars().flat_map(|c| {
-                let text = smol_str::SmolStr::from_iter([c]);
-                // Emit both press and release events
-                [ElementState::Pressed, ElementState::Released].map(|state| {
-                    EventWrapper::StaticEvent(Event::WindowEvent {
-                        window_id,
-                        event: WindowEvent::KeyboardInput {
-                            event: KeyEvent {
-                                text: if state == ElementState::Pressed {
-                                    Some(text.clone())
-                                } else {
-                                    None
-                                },
-                                state,
-                                location: KeyLocation::Standard,
-                                repeat: false,
-                                logical_key: Key::Character(text.clone()),
-                                physical_key: PhysicalKey::Unidentified(
-                                    NativeKeyCode::Unidentified,
-                                ),
-                                platform_specific: KeyEventExtra {},
-                            },
-                            is_synthetic: false,
-                            device_id: DEVICE_ID,
-                        },
-                    })
-                })
-            }),
-        );
-    }
-
-    fn handle_delete_backward(&self) {
-        let window = self.window().unwrap();
-        let window_id = RootWindowId(window.id());
-        let mtm = MainThreadMarker::new().unwrap();
-        app_state::handle_nonuser_events(
-            mtm,
-            [ElementState::Pressed, ElementState::Released].map(|state| {
-                EventWrapper::StaticEvent(Event::WindowEvent {
-                    window_id,
-                    event: WindowEvent::KeyboardInput {
-                        device_id: DEVICE_ID,
-                        event: KeyEvent {
-                            state,
-                            logical_key: Key::Named(NamedKey::Backspace),
-                            physical_key: PhysicalKey::Code(KeyCode::Backspace),
-                            platform_specific: KeyEventExtra {},
-                            repeat: false,
-                            location: KeyLocation::Standard,
-                            text: None,
-                        },
-                        is_synthetic: false,
-                    },
-                })
-            }),
-        );
     }
 }

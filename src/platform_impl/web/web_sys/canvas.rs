@@ -251,12 +251,38 @@ impl Canvas {
         }));
     }
 
+    fn add_focus_event<E, F>(
+        &self,
+        name: &'static str,
+        mut handler: F,
+    ) -> EventListenerHandle<dyn FnMut(E)>
+    where
+        E: 'static + AsRef<Event> + wasm_bindgen::convert::FromWasmAbi,
+        F: 'static + FnMut(E),
+    {
+        let canvas = self.raw().clone();
+        let id = self.id.0.to_string();
+        EventListenerHandle::new(
+            self.document().clone(),
+            name,
+            Closure::new(move |event: E| {
+                if is_window_target(event.as_ref().target(), &canvas, &id) {
+                    handler(event);
+                }
+            }),
+        )
+    }
+
     pub fn on_blur<F>(&mut self, mut handler: F)
     where
         F: 'static + FnMut(),
     {
-        self.on_blur = Some(self.common.add_event("blur", move |_: FocusEvent| {
-            handler();
+        let canvas = self.raw().clone();
+        let id = self.id.0.to_string();
+        self.on_blur = Some(self.add_focus_event("focusout", move |event: FocusEvent| {
+            if !is_window_target(event.related_target(), &canvas, &id) {
+                handler();
+            }
         }));
     }
 
@@ -264,8 +290,12 @@ impl Canvas {
     where
         F: 'static + FnMut(),
     {
-        self.on_focus = Some(self.common.add_event("focus", move |_: FocusEvent| {
-            handler();
+        let canvas = self.raw().clone();
+        let id = self.id.0.to_string();
+        self.on_focus = Some(self.add_focus_event("focusin", move |event: FocusEvent| {
+            if !is_window_target(event.related_target(), &canvas, &id) {
+                handler();
+            }
         }));
     }
 
@@ -275,7 +305,10 @@ impl Canvas {
     {
         let prevent_default = Rc::clone(&self.prevent_default);
         self.on_keyboard_release =
-            Some(self.common.add_event("keyup", move |event: KeyboardEvent| {
+            Some(self.add_focus_event("keyup", move |event: KeyboardEvent| {
+                if is_native_composition(&event) {
+                    return;
+                }
                 if prevent_default.get() {
                     event.prevent_default();
                 }
@@ -298,7 +331,10 @@ impl Canvas {
     {
         let prevent_default = Rc::clone(&self.prevent_default);
         self.on_keyboard_press =
-            Some(self.common.add_event("keydown", move |event: KeyboardEvent| {
+            Some(self.add_focus_event("keydown", move |event: KeyboardEvent| {
+                if is_native_composition(&event) {
+                    return;
+                }
                 if prevent_default.get() {
                     event.prevent_default();
                 }
@@ -516,6 +552,28 @@ impl Canvas {
         self.on_touch_end = None;
         self.on_context_menu = None;
     }
+}
+
+fn is_window_target(
+    target: Option<web_sys::EventTarget>,
+    canvas: &HtmlCanvasElement,
+    id: &str,
+) -> bool {
+    target.is_some_and(|target| {
+        target == canvas.clone().into()
+            || target.dyn_ref::<web_sys::Element>().is_some_and(|element| {
+                element.get_attribute("data-winit-ime").as_deref() == Some(id)
+            })
+    })
+}
+
+fn is_native_composition(event: &KeyboardEvent) -> bool {
+    (event.is_composing() || event.key_code() == 229 || event.key() == "Dead")
+        && event.target().is_some_and(|target| {
+            target
+                .dyn_ref::<web_sys::Element>()
+                .is_some_and(|element| element.has_attribute("data-winit-ime"))
+        })
 }
 
 impl Common {

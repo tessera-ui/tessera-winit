@@ -16,7 +16,9 @@ use sctk::reexports::csd_frame::{
     DecorationsFrame, FrameAction, FrameClick, ResizeEdge, WindowState as XdgWindowState,
 };
 use sctk::reexports::protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::WpFractionalScaleV1;
-use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
+use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
+    ChangeCause, ZwpTextInputV3,
+};
 use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 
@@ -33,6 +35,7 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 use crate::cursor::CustomCursor as RootCustomCursor;
 use crate::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Size};
 use crate::error::{ExternalError, NotSupportedError};
+use crate::event::{ime_surrounding_text, ImeChangeCause, ImeTextState};
 use crate::platform_impl::wayland::logical_to_physical_rounded;
 use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
@@ -111,6 +114,8 @@ pub struct WindowState {
 
     /// The current IME purpose.
     ime_purpose: ImePurpose,
+    ime_surrounding: Option<(String, i32, i32)>,
+    ime_cursor_area: Option<(LogicalPosition<u32>, LogicalSize<u32>)>,
 
     /// The text inputs observed on the window.
     text_inputs: Vec<ZwpTextInputV3>,
@@ -200,6 +205,8 @@ impl WindowState {
             has_pending_move: None,
             ime_allowed: false,
             ime_purpose: ImePurpose::Normal,
+            ime_surrounding: None,
+            ime_cursor_area: None,
             last_configure: None,
             max_inner_size: None,
             min_inner_size: MIN_WINDOW_SIZE,
@@ -1023,19 +1030,20 @@ impl WindowState {
         for text_input in &self.text_inputs {
             applied = true;
             if allowed {
-                text_input.enable();
-                text_input.set_content_type_by_purpose(self.ime_purpose);
+                self.enable_text_input(text_input);
+                continue;
             } else {
-                text_input.disable();
+                text_input.disable_ime();
             }
-            text_input.commit();
+            text_input.commit_ime();
         }
 
         applied
     }
 
     /// Set the IME position.
-    pub fn set_ime_cursor_area(&self, position: LogicalPosition<u32>, size: LogicalSize<u32>) {
+    pub fn set_ime_cursor_area(&mut self, position: LogicalPosition<u32>, size: LogicalSize<u32>) {
+        self.ime_cursor_area = Some((position, size));
         // FIXME: This won't fly unless user will have a way to request IME window per seat, since
         // the ime windows will be overlapping, but winit doesn't expose API to specify for
         // which seat we're setting IME position.
@@ -1043,23 +1051,74 @@ impl WindowState {
         let (width, height) = (size.width as i32, size.height as i32);
         for text_input in self.text_inputs.iter() {
             text_input.set_cursor_rectangle(x, y, width, height);
-            text_input.commit();
+            text_input.commit_ime();
         }
     }
 
-    /// Set the IME purpose.
+    pub fn set_ime_text_state(
+        &mut self,
+        state: ImeTextState,
+        cause: ImeChangeCause,
+    ) -> Result<(), NotSupportedError> {
+        let surrounding = if self.ime_purpose == ImePurpose::Password {
+            None
+        } else {
+            ime_surrounding_text(state)
+        };
+        let supported = surrounding.is_some() || self.ime_purpose == ImePurpose::Password;
+        let reset = surrounding.is_some() != self.ime_surrounding.is_some();
+        self.ime_surrounding = surrounding;
+        if self.ime_allowed {
+            for input in &self.text_inputs {
+                if reset {
+                    self.enable_text_input(input);
+                } else if let Some((text, cursor, anchor)) = &self.ime_surrounding {
+                    input.set_surrounding_text(text.clone(), *cursor, *anchor);
+                    input.set_text_change_cause(match cause {
+                        ImeChangeCause::InputMethod => ChangeCause::InputMethod,
+                        ImeChangeCause::Other => ChangeCause::Other,
+                    });
+                    input.commit_ime();
+                }
+            }
+        }
+        if supported {
+            Ok(())
+        } else {
+            Err(NotSupportedError::new())
+        }
+    }
+
+    pub fn enable_text_input(&self, input: &ZwpTextInputV3) {
+        input.enable_ime();
+        input.set_content_type_by_purpose(self.ime_purpose);
+        if let Some((text, cursor, anchor)) = &self.ime_surrounding {
+            input.set_surrounding_text(text.clone(), *cursor, *anchor);
+        }
+        if let Some((position, size)) = self.ime_cursor_area {
+            input.set_cursor_rectangle(
+                position.x as i32,
+                position.y as i32,
+                size.width as i32,
+                size.height as i32,
+            );
+        }
+        input.commit_ime();
+    }
+
     pub fn set_ime_purpose(&mut self, purpose: ImePurpose) {
-        self.ime_purpose = purpose;
-
-        for text_input in &self.text_inputs {
-            text_input.set_content_type_by_purpose(purpose);
-            text_input.commit();
+        if purpose == self.ime_purpose {
+            return;
         }
-    }
-
-    /// Get the IME purpose.
-    pub fn ime_purpose(&self) -> ImePurpose {
-        self.ime_purpose
+        self.ime_purpose = purpose;
+        if purpose == ImePurpose::Password {
+            self.ime_surrounding = None;
+        }
+        if self.ime_allowed {
+            for input in &self.text_inputs {
+                self.enable_text_input(input);
+            }
+        }
     }
 
     /// Set the scale factor for the given window.

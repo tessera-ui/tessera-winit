@@ -10,10 +10,22 @@ use windows_sys::Win32::UI::Input::Ime::{
     ATTR_TARGET_NOTCONVERTED, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, GCS_COMPATTR,
     GCS_COMPSTR, GCS_CURSORPOS, GCS_RESULTSTR, IACE_CHILDREN, IACE_DEFAULT,
 };
+use windows_sys::Win32::UI::TextServices::{InputScope, IS_DEFAULT, IS_PASSWORD, IS_PRIVATE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_IMMENABLED};
 
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "msctf", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+#[cfg_attr(not(target_arch = "x86"), link(name = "msctf", kind = "raw-dylib"))]
+extern "system" {
+    fn SetInputScope(hwnd: HWND, scope: InputScope) -> windows_sys::core::HRESULT;
+}
+
 use crate::dpi::{Position, Size};
+use crate::event::ime_byte_offset;
 use crate::platform::windows::HWND;
+use crate::window::ImePurpose;
 
 pub struct ImeContext {
     hwnd: HWND,
@@ -74,7 +86,7 @@ impl ImeContext {
 
     unsafe fn get_composition_cursor(&self, text: &str) -> Option<usize> {
         let cursor = unsafe { ImmGetCompositionStringW(self.himc, GCS_CURSORPOS, null_mut(), 0) };
-        (cursor >= 0).then(|| text.chars().take(cursor as _).map(|c| c.len_utf8()).sum())
+        (cursor >= 0).then(|| ime_byte_offset(text, cursor as usize))
     }
 
     unsafe fn get_composition_string(&self, gcs_mode: u32) -> Option<String> {
@@ -135,6 +147,18 @@ impl ImeContext {
         unsafe {
             ImmSetCompositionWindow(self.himc, &composition_form);
             ImmSetCandidateWindow(self.himc, &candidate_form);
+        }
+    }
+
+    pub unsafe fn set_ime_purpose(hwnd: HWND, purpose: ImePurpose) {
+        let scope = match purpose {
+            ImePurpose::Normal => IS_DEFAULT,
+            ImePurpose::Password => IS_PASSWORD,
+            ImePurpose::Terminal => IS_PRIVATE,
+        };
+        let result = unsafe { SetInputScope(hwnd, scope) };
+        if result < 0 {
+            tracing::warn!("Unable to set IME input scope: {result:#x}");
         }
     }
 

@@ -440,6 +440,11 @@ impl ApplicationHandler<UserEvent> for Application {
                     info!("Committed: {}", text);
                 },
                 Ime::Disabled => info!("IME disabled for Window={window_id:?}"),
+                Ime::TextState(state) => info!("IME text state={state:?}"),
+                Ime::Action(action) => info!("IME action={action:?}"),
+                Ime::DeleteSurroundingText { before, after } => {
+                    info!("IME delete before={before} after={after}")
+                },
             },
             WindowEvent::PinchGesture { delta, .. } => {
                 window.zoom += delta;

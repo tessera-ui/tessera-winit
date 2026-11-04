@@ -363,28 +363,24 @@ impl Inner {
         warn!("`Window::set_window_icon` is ignored on iOS")
     }
 
-    pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {
-        warn!("`Window::set_ime_cursor_area` is ignored on iOS")
+    pub fn set_ime_cursor_area(&self, position: Position, size: Size) {
+        self.view.ime().set_cursor_area(position, size);
     }
 
-    /// Show / hide the keyboard. To show the keyboard, we call `becomeFirstResponder`,
-    /// requesting focus for the [WinitView]. Since [WinitView] implements
-    /// [objc2_ui_kit::UIKeyInput], the keyboard will be shown.
-    /// <https://developer.apple.com/documentation/uikit/uiresponder/1621113-becomefirstresponder>
     pub fn set_ime_allowed(&self, allowed: bool) {
-        if allowed {
-            unsafe {
-                self.view.becomeFirstResponder();
-            }
-        } else {
-            unsafe {
-                self.view.resignFirstResponder();
-            }
-        }
+        self.view.ime().set_allowed(allowed);
     }
 
-    pub fn set_ime_purpose(&self, _purpose: ImePurpose) {
-        warn!("`Window::set_ime_purpose` is ignored on iOS")
+    pub fn set_ime_text_state(&self, state: crate::event::ImeTextState) {
+        self.view.ime().set_text_state(state);
+    }
+
+    pub fn set_ime_purpose(&self, purpose: ImePurpose) {
+        self.view.ime().set_purpose(purpose);
+    }
+
+    pub fn set_ime_options(&self, options: crate::window::ImeOptions) {
+        self.view.ime().set_options(options);
     }
 
     pub fn focus_window(&self) {

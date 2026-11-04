@@ -1240,7 +1240,7 @@ impl Window {
     /// ## Platform-specific
     ///
     /// - **X11:** - area is not supported, only position.
-    /// - **iOS / Android / Web / Orbital:** Unsupported.
+    /// - **Android / Orbital:** Unsupported.
     ///
     /// [chinese]: https://support.apple.com/guide/chinese-input-method/use-the-candidate-window-cim12992/104/mac/12.0
     /// [japanese]: https://support.apple.com/guide/japanese-input-method/use-the-candidate-window-jpim10262/6.3/mac/12.0
@@ -1274,7 +1274,7 @@ impl Window {
     /// - **macOS:** IME must be enabled to receive text-input where dead-key sequences are
     ///   combined.
     /// - **iOS / Android:** This will show / hide the soft keyboard.
-    /// - **Web / Orbital:** Unsupported.
+    /// - **Orbital:** Unsupported.
     /// - **X11**: Enabling IME will disable dead keys reporting during compose.
     ///
     /// [`Ime`]: crate::event::WindowEvent::Ime
@@ -1285,11 +1285,50 @@ impl Window {
         self.window.maybe_queue_on_main(move |w| w.set_ime_allowed(allowed))
     }
 
+    /// Publishes the complete text, selection and composing region to the IME.
+    ///
+    /// Supported on Android GameActivity, iOS, macOS, Wayland and Web. Wayland omits
+    /// composing text and limits surrounding text to 4000 bytes; larger selections
+    /// and surrounding text containing NUL are unsupported. Password fields do not
+    /// publish surrounding text on Wayland.
+    pub fn set_ime_text_state(
+        &self,
+        state: crate::event::ImeTextState,
+        cause: crate::event::ImeChangeCause,
+    ) -> Result<(), crate::error::NotSupportedError> {
+        let _ = cause;
+        #[cfg(any(
+            all(android_platform, feature = "android-game-activity"),
+            web_platform,
+            ios_platform,
+            macos_platform
+        ))]
+        {
+            self.window.maybe_queue_on_main(move |w| w.set_ime_text_state(state));
+            Ok(())
+        }
+        #[cfg(free_unix)]
+        {
+            return self.window.maybe_wait_on_main(move |w| w.set_ime_text_state(state, cause));
+        }
+        #[cfg(not(any(
+            all(android_platform, feature = "android-game-activity"),
+            web_platform,
+            ios_platform,
+            macos_platform,
+            free_unix
+        )))]
+        {
+            let _ = state;
+            Err(crate::error::NotSupportedError::new())
+        }
+    }
+
     /// Sets the IME purpose for the window using [`ImePurpose`].
     ///
     /// ## Platform-specific
     ///
-    /// - **iOS / Android / Web / Windows / X11 / macOS / Orbital:** Unsupported.
+    /// - **Android / X11 / macOS / Orbital:** Unsupported.
     #[inline]
     pub fn set_ime_purpose(&self, purpose: ImePurpose) {
         let _span = tracing::debug_span!(
@@ -1298,6 +1337,24 @@ impl Window {
         )
         .entered();
         self.window.maybe_queue_on_main(move |w| w.set_ime_purpose(purpose))
+    }
+
+    /// Sets the input purpose and virtual keyboard action.
+    ///
+    /// Virtual keyboard actions are supported by Android GameActivity, iOS and Web.
+    pub fn set_ime_options(&self, options: ImeOptions) {
+        #[cfg(any(
+            all(android_platform, feature = "android-game-activity"),
+            web_platform,
+            ios_platform
+        ))]
+        self.window.maybe_queue_on_main(move |w| w.set_ime_options(options));
+        #[cfg(not(any(
+            all(android_platform, feature = "android-game-activity"),
+            web_platform,
+            ios_platform
+        )))]
+        self.set_ime_purpose(options.purpose);
     }
 
     /// Brings the window to the front and sets input focus. Has no effect if the window is
@@ -1823,8 +1880,9 @@ pub enum WindowLevel {
 ///
 /// ## Platform-specific
 ///
-/// - **iOS / Android / Web / Windows / X11 / macOS / Orbital:** Unsupported.
+/// - **Android / X11 / macOS / Orbital:** Unsupported.
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[non_exhaustive]
 pub enum ImePurpose {
     /// No special hints for the IME (default).
@@ -1836,6 +1894,16 @@ pub enum ImePurpose {
     ///
     /// For example, that could alter OSK on Wayland to show extra buttons.
     Terminal,
+}
+
+/// The input purpose and return-key action for an editor.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImeOptions {
+    /// The content purpose used to select an appropriate keyboard.
+    pub purpose: ImePurpose,
+    /// The action requested by the virtual keyboard's return key.
+    pub action: crate::event::ImeAction,
 }
 
 /// An opaque token used to activate the [`Window`].

@@ -1259,6 +1259,7 @@ unsafe fn public_window_callback_inner(
 
         WM_DESTROY => {
             use crate::event::WindowEvent::Destroyed;
+            unsafe { ImeContext::set_ime_purpose(window, crate::window::ImePurpose::Normal) };
             unsafe { RevokeDragDrop(window) };
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
