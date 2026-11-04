@@ -188,12 +188,14 @@ features = [
     "NSArray",
     "NSEnumerator",
     "NSGeometry",
+    "NSKeyValueCoding",
     "NSObjCRuntime",
     "NSOperation",
     "NSString",
     "NSProcessInfo",
     "NSThread",
     "NSSet",
+    "NSValue",
 ]
 
 [target.'cfg(target_os = "ios")'.dependencies.objc2-ui-kit]
