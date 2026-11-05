@@ -223,9 +223,7 @@ impl<T: 'static> EventLoop<T> {
                 },
                 MainEvent::WindowResized { .. } => resized = true,
                 MainEvent::RedrawNeeded { .. } => pending_redraw = true,
-                MainEvent::ContentRectChanged { .. } => {
-                    warn!("TODO: find a way to notify application of content rect change");
-                },
+                MainEvent::ContentRectChanged { .. } => pending_redraw = true,
                 MainEvent::GainedFocus => {
                     HAS_FOCUS.store(true, Ordering::Relaxed);
                     callback(
