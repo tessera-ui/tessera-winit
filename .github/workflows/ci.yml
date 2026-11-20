@@ -11,11 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: taiki-e/checkout-action@v1
-    - uses: actions/checkout@v4
-      with:
-        repository: tessera-ui/tessera-android-activity
-        ref: ime
-        path: tessera-android-activity
+    - name: Check out the Android Activity path dependency
+      run: git clone --depth 1 --branch ime https://github.com/tessera-ui/tessera-android-activity.git ../tessera-android-activity
     - uses: dtolnay/rust-toolchain@nightly
       with:
         components: rustfmt
@@ -94,11 +91,8 @@ jobs:
 
     steps:
     - uses: taiki-e/checkout-action@v1
-    - uses: actions/checkout@v4
-      with:
-        repository: tessera-ui/tessera-android-activity
-        ref: ime
-        path: tessera-android-activity
+    - name: Check out the Android Activity path dependency
+      run: git clone --depth 1 --branch ime https://github.com/tessera-ui/tessera-android-activity.git ../tessera-android-activity
 
     - name: Restore cache of cargo folder
       # We use `restore` and later `save`, so that we can create the key after
@@ -234,11 +228,8 @@ jobs:
 
     steps:
     - uses: taiki-e/checkout-action@v1
-    - uses: actions/checkout@v4
-      with:
-        repository: tessera-ui/tessera-android-activity
-        ref: ime
-        path: tessera-android-activity
+    - name: Check out the Android Activity path dependency
+      run: git clone --depth 1 --branch ime https://github.com/tessera-ui/tessera-android-activity.git ../tessera-android-activity
     - uses: EmbarkStudios/cargo-deny-action@v2
       with:
         command: check
