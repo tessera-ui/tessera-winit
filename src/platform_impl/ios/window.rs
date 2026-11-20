@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
-use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
+use objc2::{ClassType, DeclaredClass, class, declare_class, msg_send, msg_send_id, mutability};
 use objc2_foundation::{
     CGFloat, CGPoint, CGRect, CGSize, MainThreadBound, MainThreadMarker, NSObjectProtocol,
 };
@@ -24,7 +24,7 @@ use crate::event::{Event, WindowEvent};
 use crate::icon::Icon;
 use crate::platform::ios::{ScreenEdge, StatusBarStyle, ValidOrientations};
 use crate::platform_impl::platform::{
-    app_state, monitor, ActiveEventLoop, Fullscreen, MonitorHandle,
+    ActiveEventLoop, Fullscreen, MonitorHandle, app_state, monitor,
 };
 use crate::window::{
     CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType, WindowAttributes,
@@ -73,6 +73,48 @@ declare_class!(
     }
 );
 
+thread_local! {
+    static PENDING_SCENE_WINDOWS: std::cell::RefCell<Vec<Retained<WinitUIWindow>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn connected_window_scene() -> Option<Retained<AnyObject>> {
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(UIApplication), sharedApplication];
+        if app.is_null() {
+            return None;
+        }
+        let scenes: Option<Retained<AnyObject>> = msg_send_id![app, connectedScenes];
+        let scenes: Retained<AnyObject> = msg_send_id![&*scenes?, allObjects];
+        let count: usize = msg_send![&scenes, count];
+        (0..count).find_map(|index| {
+            let scene: Retained<AnyObject> = msg_send_id![&scenes, objectAtIndex: index];
+            let is_window_scene: bool = msg_send![&scene, isKindOfClass: class!(UIWindowScene)];
+            is_window_scene.then_some(scene)
+        })
+    }
+}
+
+pub(crate) fn attach_pending_windows(scene: &AnyObject) {
+    let is_window_scene: bool = unsafe { msg_send![scene, isKindOfClass: class!(UIWindowScene)] };
+    if !is_window_scene {
+        return;
+    }
+    for window in PENDING_SCENE_WINDOWS.with(|windows| std::mem::take(&mut *windows.borrow_mut())) {
+        join_scene(&window, scene);
+        window.makeKeyAndVisible();
+    }
+}
+
+fn join_scene(window: &WinitUIWindow, scene: &AnyObject) {
+    unsafe {
+        let _: () = msg_send![window, setWindowScene: scene];
+        let coordinate_space: Retained<AnyObject> = msg_send_id![scene, coordinateSpace];
+        let bounds: CGRect = msg_send![&coordinate_space, bounds];
+        let _: () = msg_send![window, setFrame: bounds];
+    }
+}
+
 impl WinitUIWindow {
     pub(crate) fn new(
         mtm: MainThreadMarker,
@@ -81,6 +123,11 @@ impl WinitUIWindow {
         view_controller: &UIViewController,
     ) -> Retained<Self> {
         let this: Retained<Self> = unsafe { msg_send_id![mtm.alloc(), initWithFrame: frame] };
+
+        match connected_window_scene() {
+            Some(scene) => join_scene(&this, &scene),
+            None => PENDING_SCENE_WINDOWS.with(|windows| windows.borrow_mut().push(this.clone())),
+        }
 
         this.setRootViewController(Some(view_controller));
 

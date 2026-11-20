@@ -6,13 +6,14 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use core_foundation::base::{CFIndex, CFRelease};
 use core_foundation::runloop::{
-    kCFRunLoopAfterWaiting, kCFRunLoopBeforeWaiting, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
-    kCFRunLoopExit, CFRunLoopActivity, CFRunLoopAddObserver, CFRunLoopAddSource, CFRunLoopGetMain,
+    CFRunLoopActivity, CFRunLoopAddObserver, CFRunLoopAddSource, CFRunLoopGetMain,
     CFRunLoopObserverCreate, CFRunLoopObserverRef, CFRunLoopSourceContext, CFRunLoopSourceCreate,
     CFRunLoopSourceInvalidate, CFRunLoopSourceRef, CFRunLoopSourceSignal, CFRunLoopWakeUp,
+    kCFRunLoopAfterWaiting, kCFRunLoopBeforeWaiting, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
+    kCFRunLoopExit,
 };
 use objc2::rc::Retained;
-use objc2::{msg_send_id, ClassType};
+use objc2::{ClassType, msg_send_id};
 use objc2_foundation::{MainThreadMarker, NSNotificationCenter, NSObject};
 use objc2_ui_kit::{
     UIApplication, UIApplicationDidBecomeActiveNotification,
@@ -31,9 +32,9 @@ use crate::platform::ios::Idiom;
 use crate::platform_impl::ios::app_state::{EventLoopHandler, HandlePendingUserEvents};
 use crate::window::{CustomCursor, CustomCursorSource, Theme};
 
-use super::app_state::{send_occluded_event_for_all_windows, AppState, EventWrapper};
+use super::app_state::{AppState, EventWrapper, send_occluded_event_for_all_windows};
 use super::notification_center::create_observer;
-use super::{app_state, monitor, MonitorHandle};
+use super::{MonitorHandle, app_state, monitor};
 
 #[derive(Debug)]
 pub struct ActiveEventLoop {
@@ -150,6 +151,7 @@ pub struct EventLoop<T: 'static> {
     _did_enter_background_observer: Retained<NSObject>,
     _will_terminate_observer: Retained<NSObject>,
     _did_receive_memory_warning_observer: Retained<NSObject>,
+    _scene_will_connect_observer: Retained<NSObject>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -255,6 +257,15 @@ impl<T: 'static> EventLoop<T> {
             },
         );
 
+        let scene_will_connect =
+            objc2_foundation::NSString::from_str("UISceneWillConnectNotification");
+        let _scene_will_connect_observer =
+            create_observer(&center, &scene_will_connect, move |notification| {
+                if let Some(scene) = unsafe { notification.object() } {
+                    super::window::attach_pending_windows(&scene);
+                }
+            });
+
         Ok(EventLoop {
             mtm,
             sender,
@@ -267,6 +278,7 @@ impl<T: 'static> EventLoop<T> {
             _did_enter_background_observer,
             _will_terminate_observer,
             _did_receive_memory_warning_observer,
+            _scene_will_connect_observer,
         })
     }
 

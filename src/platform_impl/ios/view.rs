@@ -1,22 +1,25 @@
 #![allow(clippy::unnecessary_cast)]
 use std::cell::{Cell, RefCell};
+use std::ptr::NonNull;
 
 use objc2::rc::Retained;
-use objc2::runtime::{NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
 use objc2_foundation::{CGFloat, CGPoint, CGRect, MainThreadMarker, NSObject, NSSet};
 use objc2_ui_kit::{
     UICoordinateSpace, UIEvent, UIForceTouchCapability, UIGestureRecognizer,
-    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIPanGestureRecognizer,
-    UIPinchGestureRecognizer, UIResponder, UIRotationGestureRecognizer, UITapGestureRecognizer,
-    UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
+    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIKeyModifierFlags, UIKeyboardHIDUsage,
+    UIPanGestureRecognizer, UIPinchGestureRecognizer, UIPress, UIPressesEvent, UIResponder,
+    UIRotationGestureRecognizer, UITapGestureRecognizer, UITouch, UITouchPhase, UITouchType,
+    UITraitEnvironment, UIView,
 };
 
 use super::app_state::{self, EventWrapper};
 use super::ime::Ime;
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalPosition;
-use crate::event::{Event, Force, Touch, TouchPhase, WindowEvent};
+use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
+use crate::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey};
 use crate::platform_impl::platform::DEVICE_ID;
 use crate::window::{WindowAttributes, WindowId as RootWindowId};
 
@@ -69,24 +72,24 @@ declare_class!(
             let _: () = unsafe { msg_send![super(self), layoutSubviews] };
 
             let window = self.window().unwrap();
-            let window_bounds = window.bounds();
             let screen = window.screen();
-            let screen_space = screen.coordinateSpace();
-            let screen_frame = self.convertRect_toCoordinateSpace(window_bounds, &screen_space);
-            let scale_factor = screen.scale();
-            let size = crate::dpi::LogicalSize {
-                width: screen_frame.size.width as f64,
-                height: screen_frame.size.height as f64,
-            }
-            .to_physical(scale_factor as f64);
 
-            // If the app is started in landscape, the view frame and window bounds can be mismatched.
-            // The view frame will be in portrait and the window bounds in landscape. So apply the
-            // window bounds to the view frame to make it consistent.
-            let view_frame = self.frame();
-            if view_frame != window_bounds {
+            // Scene-backed windows manage their root view and may apply an interface
+            // rotation. Setting the frame of a transformed UIView is undefined.
+            let has_scene = window.respondsToSelector(sel!(windowScene)) && unsafe {
+                let scene: *mut AnyObject = msg_send![&*window, windowScene];
+                !scene.is_null()
+            };
+            let window_bounds = window.bounds();
+            if !has_scene && self.frame() != window_bounds {
                 self.setFrame(window_bounds);
             }
+            let bounds = self.bounds();
+            let size = crate::dpi::LogicalSize {
+                width: bounds.size.width as f64,
+                height: bounds.size.height as f64,
+            }
+            .to_physical(screen.scale() as f64);
 
             app_state::handle_nonuser_event(
                 mtm,
@@ -322,6 +325,22 @@ declare_class!(
         fn can_become_first_responder(&self) -> bool {
             true
         }
+
+        #[method(pressesBegan:withEvent:)]
+        fn presses_began(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            let unhandled = self.handle_keyboard_presses(presses, ElementState::Pressed);
+            if !unhandled.is_empty() {
+                unsafe { msg_send![super(self), pressesBegan: &*unhandled_presses(&unhandled), withEvent: event] }
+            }
+        }
+
+        #[method(pressesEnded:withEvent:)]
+        fn presses_ended(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            let unhandled = self.handle_keyboard_presses(presses, ElementState::Released);
+            if !unhandled.is_empty() {
+                unsafe { msg_send![super(self), pressesEnded: &*unhandled_presses(&unhandled), withEvent: event] }
+            }
+        }
     }
 
     unsafe impl NSObjectProtocol for WinitView {}
@@ -336,7 +355,76 @@ declare_class!(
 
 );
 
+fn unhandled_presses(presses: &[&UIPress]) -> Retained<NSSet<UIPress>> {
+    let mut pointers = presses.iter().map(|&press| NonNull::from(press)).collect::<Vec<_>>();
+    // SAFETY: The event owns each press throughout this call. UIKit already
+    // stores these identity-hashed objects in an NSSet even while they change phase.
+    unsafe { NSSet::initWithObjects_count(NSSet::alloc(), pointers.as_mut_ptr(), pointers.len()) }
+}
+
 impl WinitView {
+    fn handle_keyboard_presses<'a>(
+        &self,
+        presses: &'a NSSet<UIPress>,
+        state: ElementState,
+    ) -> Vec<&'a UIPress> {
+        let Some(window) = self.window() else { return presses.iter().collect() };
+        let window_id = RootWindowId(window.id());
+        let mtm = MainThreadMarker::from(self);
+        let mut unhandled = Vec::new();
+        for press in presses {
+            let Some(key) = (unsafe { press.key(mtm) }) else {
+                unhandled.push(press);
+                continue;
+            };
+            let (code, logical) = match unsafe { key.keyCode() } {
+                UIKeyboardHIDUsage::KeyboardTab => (KeyCode::Tab, NamedKey::Tab),
+                UIKeyboardHIDUsage::KeyboardReturnOrEnter => (KeyCode::Enter, NamedKey::Enter),
+                UIKeyboardHIDUsage::KeyboardSpacebar => (KeyCode::Space, NamedKey::Space),
+                UIKeyboardHIDUsage::KeyboardLeftArrow => (KeyCode::ArrowLeft, NamedKey::ArrowLeft),
+                UIKeyboardHIDUsage::KeyboardRightArrow => {
+                    (KeyCode::ArrowRight, NamedKey::ArrowRight)
+                },
+                UIKeyboardHIDUsage::KeyboardUpArrow => (KeyCode::ArrowUp, NamedKey::ArrowUp),
+                UIKeyboardHIDUsage::KeyboardDownArrow => (KeyCode::ArrowDown, NamedKey::ArrowDown),
+                UIKeyboardHIDUsage::KeyboardEscape => (KeyCode::Escape, NamedKey::Escape),
+                _ => {
+                    unhandled.push(press);
+                    continue;
+                },
+            };
+            let flags = unsafe { key.modifierFlags() };
+            let mut modifiers = ModifiersState::empty();
+            for (flag, modifier) in [
+                (UIKeyModifierFlags::UIKeyModifierShift, ModifiersState::SHIFT),
+                (UIKeyModifierFlags::UIKeyModifierControl, ModifiersState::CONTROL),
+                (UIKeyModifierFlags::UIKeyModifierAlternate, ModifiersState::ALT),
+                (UIKeyModifierFlags::UIKeyModifierCommand, ModifiersState::SUPER),
+            ] {
+                modifiers.set(modifier, flags.contains(flag));
+            }
+            app_state::handle_nonuser_events(
+                mtm,
+                [WindowEvent::ModifiersChanged(modifiers.into()), WindowEvent::KeyboardInput {
+                    device_id: DEVICE_ID,
+                    event: KeyEvent {
+                        physical_key: code.into(),
+                        logical_key: Key::Named(logical),
+                        text: None,
+                        location: KeyLocation::Standard,
+                        state,
+                        repeat: false,
+                        platform_specific: super::KeyEventExtra {},
+                    },
+                    is_synthetic: false,
+                }]
+                .into_iter()
+                .map(|event| EventWrapper::StaticEvent(Event::WindowEvent { window_id, event })),
+            );
+        }
+        unhandled
+    }
+
     pub(crate) fn ime(&self) -> &Ime {
         &self.ivars().ime
     }

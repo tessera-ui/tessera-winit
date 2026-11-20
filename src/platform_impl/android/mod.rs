@@ -143,6 +143,7 @@ pub struct EventLoop<T: 'static> {
     running: bool,
     pending_redraw: bool,
     cause: StartCause,
+    scale_factor: f64,
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
 }
@@ -194,6 +195,7 @@ impl<T: 'static> EventLoop<T> {
             running: false,
             pending_redraw: false,
             cause: StartCause::Init,
+            scale_factor: MonitorHandle::new(android_app.clone()).scale_factor(),
             ignore_volume_keys: attributes.ignore_volume_keys,
             combining_accent: None,
         })
@@ -246,12 +248,10 @@ impl<T: 'static> EventLoop<T> {
                 },
                 MainEvent::ConfigChanged { .. } => {
                     let monitor = MonitorHandle::new(self.android_app.clone());
-                    let old_scale_factor = monitor.scale_factor();
                     let scale_factor = monitor.scale_factor();
-                    if (scale_factor - old_scale_factor).abs() < f64::EPSILON {
-                        let new_inner_size = Arc::new(Mutex::new(
-                            MonitorHandle::new(self.android_app.clone()).size(),
-                        ));
+                    if scale_factor != self.scale_factor {
+                        self.scale_factor = scale_factor;
+                        let new_inner_size = Arc::new(Mutex::new(monitor.size()));
                         let event = event::Event::WindowEvent {
                             window_id: window::WindowId(WindowId),
                             event: event::WindowEvent::ScaleFactorChanged {
@@ -289,9 +289,17 @@ impl<T: 'static> EventLoop<T> {
                     warn!("TODO: forward onStop notification to application");
                 },
                 MainEvent::Destroy => {
-                    // XXX: maybe exit mainloop to drop things before being
-                    // killed by the OS?
-                    warn!("TODO: forward onDestroy notification to application");
+                    self.running = false;
+                    callback(
+                        event::Event::WindowEvent {
+                            window_id: window::WindowId(WindowId),
+                            event: event::WindowEvent::Destroyed,
+                        },
+                        self.window_target(),
+                    );
+                    // GameActivity waits for android_main to return from its event loop.
+                    self.window_target().exit();
+                    return;
                 },
                 MainEvent::InsetsChanged { .. } => {
                     // XXX: how to forward this state to applications?
@@ -497,6 +505,20 @@ impl<T: 'static> EventLoop<T> {
                             None
                         };
 
+                        let meta = key.meta_state();
+                        let mut modifiers = crate::keyboard::ModifiersState::empty();
+                        modifiers.set(crate::keyboard::ModifiersState::SHIFT, meta.shift_on());
+                        modifiers.set(crate::keyboard::ModifiersState::CONTROL, meta.ctrl_on());
+                        modifiers.set(crate::keyboard::ModifiersState::ALT, meta.alt_on());
+                        modifiers.set(crate::keyboard::ModifiersState::SUPER, meta.meta_on());
+                        callback(
+                            event::Event::WindowEvent {
+                                window_id: window::WindowId(WindowId),
+                                event: event::WindowEvent::ModifiersChanged(modifiers.into()),
+                            },
+                            self.window_target(),
+                        );
+
                         let event = event::Event::WindowEvent {
                             window_id: window::WindowId(WindowId),
                             event: event::WindowEvent::KeyboardInput {
@@ -671,6 +693,13 @@ impl<T: 'static> EventLoop<T> {
 
     fn exiting(&self) -> bool {
         self.window_target.p.exiting()
+    }
+}
+
+impl<T: 'static> Drop for EventLoop<T> {
+    fn drop(&mut self) {
+        // A replacement Activity can start another android_main in the same process.
+        crate::event_loop::EventLoopBuilder::<T>::allow_event_loop_recreation();
     }
 }
 

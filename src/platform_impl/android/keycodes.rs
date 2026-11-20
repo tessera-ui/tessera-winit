@@ -224,6 +224,18 @@ pub fn character_map_and_combine_key(
 pub fn to_logical(key_char: Option<KeyMapChar>, keycode: Keycode) -> Key {
     use android_activity::input::Keycode::*;
 
+    // KeyCharacterMap supplies text for these controls, but their logical
+    // identity must remain a named key for navigation and activation.
+    match keycode {
+        Tab => return Key::Named(NamedKey::Tab),
+        Space => return Key::Named(NamedKey::Space),
+        Enter | NumpadEnter => return Key::Named(NamedKey::Enter),
+        Del => return Key::Named(NamedKey::Backspace),
+        Escape => return Key::Named(NamedKey::Escape),
+        ForwardDel => return Key::Named(NamedKey::Delete),
+        _ => {}
+    }
+
     let native = NativeKey::Android(keycode.into());
 
     match key_char {
@@ -308,13 +320,9 @@ pub fn to_logical(key_char: Option<KeyMapChar>, keycode: Keycode) -> Key {
             AltRight => Key::Named(NamedKey::Alt),
             ShiftLeft => Key::Named(NamedKey::Shift),
             ShiftRight => Key::Named(NamedKey::Shift),
-            Tab => Key::Named(NamedKey::Tab),
-            Space => Key::Named(NamedKey::Space),
             Sym => Key::Named(NamedKey::Symbol),
             Explorer => Key::Named(NamedKey::LaunchWebBrowser),
             Envelope => Key::Named(NamedKey::LaunchMail),
-            Enter => Key::Named(NamedKey::Enter),
-            Del => Key::Named(NamedKey::Backspace),
 
             // According to https://developer.android.com/reference/android/view/KeyEvent#KEYCODE_NUM
             Num => Key::Named(NamedKey::Alt),
@@ -334,8 +342,6 @@ pub fn to_logical(key_char: Option<KeyMapChar>, keycode: Keycode) -> Key {
             PageUp => Key::Named(NamedKey::PageUp),
             PageDown => Key::Named(NamedKey::PageDown),
 
-            Escape => Key::Named(NamedKey::Escape),
-            ForwardDel => Key::Named(NamedKey::Delete),
             CtrlLeft => Key::Named(NamedKey::Control),
             CtrlRight => Key::Named(NamedKey::Control),
             CapsLock => Key::Named(NamedKey::CapsLock),
@@ -383,7 +389,6 @@ pub fn to_logical(key_char: Option<KeyMapChar>, keycode: Keycode) -> Key {
             NumpadAdd => Key::Character("+".into()),
             NumpadDot => Key::Character(".".into()),
             NumpadComma => Key::Character(",".into()),
-            NumpadEnter => Key::Named(NamedKey::Enter),
             NumpadEquals => Key::Character("=".into()),
             NumpadLeftParen => Key::Character("(".into()),
             NumpadRightParen => Key::Character(")".into()),
