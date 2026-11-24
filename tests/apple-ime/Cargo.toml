@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-winit = { package = "tessera-winit", version = "0.30.13", path = "../..", default-features = false, features = ["rwh_06"] }
+winit = { package = "tessera-winit", path = "../..", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6.2"
 objc2 = "0.5.2"
 objc2-foundation = { version = "0.2.2", features = ["NSString", "NSRange"] }
