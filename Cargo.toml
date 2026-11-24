@@ -1,6 +1,6 @@
 [package]
 name = "tessera-winit"
-version = "0.30.13"
+version = "0.31.0"
 authors = [
     "The winit contributors",
     "Pierre Krieger <pierre.krieger1708@gmail.com>",
@@ -115,7 +115,7 @@ softbuffer = { version = "0.4.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-android-activity = { package = "tessera-android-activity", version = "0.6.1", path = "../tessera-android-activity/android-activity" }
+android-activity = { package = "tessera-android-activity", version = "0.6.2", path = "../tessera-android-activity/android-activity" }
 ndk = { version = "0.9.0", default-features = false }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
